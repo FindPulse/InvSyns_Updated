@@ -345,8 +345,10 @@ def main():
 
     as_of = datetime.strptime(args.as_of_date, "%Y-%m-%d").date() if args.as_of_date else date.today()
 
-    downloaded_xlsx = f"ferrada_gsheet_{as_of.isoformat()}.xlsx"
-    merged_xlsx = f"ferrada_merged_{as_of.isoformat()}.xlsx"
+    # Use existing Vendor_Files folder
+    vendor_dir = "Vendor_Files"
+    downloaded_xlsx = os.path.join(vendor_dir, f"ferrada_gsheet_{as_of.isoformat()}.xlsx")
+    merged_xlsx = os.path.join(vendor_dir, f"ferrada_merged_{as_of.isoformat()}.xlsx")
 
     print("  Downloading Google Sheet as XLSX...")
     download_gsheet_xlsx(args.sheet_id, downloaded_xlsx, timeout=args.timeout)

@@ -241,7 +241,9 @@ def main():
 
     as_of = datetime.strptime(args.as_of_date, "%Y-%m-%d").date() if args.as_of_date else date.today()
 
-    out_xlsx = args.out_xlsx or f"vossen_inventory_{as_of.isoformat()}.xlsx"
+    # Use existing Vendor_Files folder
+    vendor_dir = "Vendor_Files"
+    out_xlsx = args.out_xlsx or os.path.join(vendor_dir, f"vossen_inventory_{as_of.isoformat()}.xlsx")
 
     # Fetch + parse CSV
     text = fetch_text(args.url, timeout=args.timeout, verify_ssl=args.verify_ssl, user_agent=args.user_agent)
