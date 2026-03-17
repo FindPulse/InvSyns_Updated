@@ -23,12 +23,8 @@ Usage:
 
 import argparse
 import os
-import smtplib
 from datetime import datetime, date
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from typing import Dict, List, Optional, Tuple
-import time
 
 import psycopg2
 import psycopg2.extras
@@ -94,93 +90,23 @@ def get_mysql_conn():
     port = int(os.environ.get("MYSQL_PORT", "3306"))
 
     if not all([host, db, user, pw]):
-        raise RuntimeError("Missing MySQL env vars (MYSQL_HOST/MYSQL_DATABASE/MYSQL_USER/MYSQL_PASSWORD).")
+        raise RuntimeError("Missing MySQL env vars (MYSQL_HOST/MYSQL_DB/MYSQL_USER/MYSQL_PASSWORD).")
 
-    try:
-        return pymysql.connect(
-            host=host,
-            user=user,
-            password=pw,
-            database=db,
-            port=port,
-            autocommit=False,
-            charset="utf8mb4",
-            cursorclass=pymysql.cursors.Cursor,
-        )
-    except pymysql.Error as e:
-        raise RuntimeError(f"Failed to connect to MySQL at {host}:{port}/{db}: {e}")
+    return pymysql.connect(
+        host=host,
+        user=user,
+        password=pw,
+        database=db,
+        port=port,
+        autocommit=False,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.Cursor,
+    )
 
 
 def chunked(lst: List, n: int):
     for i in range(0, len(lst), n):
         yield lst[i:i+n]
-
-
-# -------------------- Email --------------------
-
-def send_summary_email(summary: str, recipient: Optional[str]) -> bool:
-    """Send summary report via email. Returns True if sent, False otherwise."""
-    if not recipient:
-        print("(No email recipient configured, skipping email)")
-        return False
-    
-    email_host = os.environ.get("EMAIL_HOST", "").strip()
-    email_port = int(os.environ.get("EMAIL_PORT", "587"))
-    email_from = os.environ.get("EMAIL_FROM", "").strip()
-    email_password = os.environ.get("EMAIL_PASSWORD", "").strip()
-    
-    if not all([email_host, email_from, email_password]):
-        print("WARNING: Missing email config (EMAIL_HOST, EMAIL_FROM, EMAIL_PASSWORD). Email not sent.")
-        return False
-    
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = email_from
-        msg["To"] = recipient
-        msg["Subject"] = f"WCMLIM Stock Update Summary - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        msg.attach(MIMEText(summary, "plain"))
-        
-        with smtplib.SMTP(email_host, email_port) as server:
-            server.starttls()
-            server.login(email_from, email_password)
-            server.send_message(msg)
-        
-        print(f"✓ Email sent to {recipient}")
-        return True
-    except Exception as e:
-        print(f"ERROR sending email: {e}")
-        return False
-
-
-def generate_summary(as_of: date, total_updated: int, total_inserted: int, 
-                    total_rows: int, dry_run: bool, duration_secs: float, 
-                    prefix: str, meta_key: str, batch_size: int) -> str:
-    """Generate a summary report string."""
-    summary = f"""
-{'='*60}
-WCMLIM STOCK UPDATE SUMMARY
-{'='*60}
-
-Execution Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Duration: {duration_secs:.2f} seconds
-
-STATUS: {'DRY RUN (NO CHANGES)' if dry_run else 'SUCCESS'}
-
-RESULTS:
-  Total Rows Processed: {total_rows}
-  Total Updated:        {total_updated}
-  Total Inserted:       {total_inserted}
-
-CONFIGURATION:
-  as_of_date:   {as_of.isoformat()}
-  wp_prefix:    {prefix}
-  meta_key:     {meta_key}
-  batch_size:   {batch_size}
-  dry_run:      {dry_run}
-
-{'='*60}
-"""
-    return summary
 
 
 def get_table_prefix() -> str:
@@ -266,22 +192,6 @@ def upsert_wcmlim(cur, items: List[Tuple[int, int]], meta_key: str, prefix: str)
     return (updated, inserted)
 
 
-# -------------------- Validation --------------------
-
-def validate_env_vars():
-    """Check all required env vars before script runs."""
-    required_pg = ["PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD"]
-    required_mysql = ["MYSQL_HOST", "MYSQL_DATABASE", "MYSQL_USER", "MYSQL_PASSWORD"]
-    
-    missing = []
-    for var in required_pg + required_mysql:
-        if not os.environ.get(var):
-            missing.append(var)
-    
-    if missing:
-        raise RuntimeError(f"Missing environment variables: {', '.join(missing)}. Check your .env file.")
-
-
 # -------------------- Main --------------------
 
 def main():
@@ -290,38 +200,17 @@ def main():
     ap.add_argument("--limit", type=int, default=None, help="Limit number of updates (testing)")
     ap.add_argument("--batch-size", type=int, default=1000, help="MySQL batch size")
     ap.add_argument("--dry-run", action="store_true", help="Print plan only, do not update MySQL")
-    ap.add_argument("--email", default=None, help="Email recipient for summary (or use EMAIL_RECIPIENT env var)")
     args = ap.parse_args()
-
-    # Validate all env vars upfront
-    try:
-        validate_env_vars()
-    except RuntimeError as e:
-        print(f"ERROR: {e}")
-        return 1
 
     as_of = datetime.strptime(args.as_of_date, "%Y-%m-%d").date()
 
-    # Validate batch size
-    if args.batch_size <= 0:
-        print("ERROR: --batch-size must be > 0")
-        return 1
-
     prefix = get_table_prefix()
     meta_key = wcmlim_meta_key()
-    
-    # Get email recipient from arg or env var
-    recipient = args.email or os.environ.get("EMAIL_RECIPIENT")
-
-    start_time = time.time()
 
     # 1) Load desired qty per variation from Postgres
     rows = fetch_updates_from_pg(as_of, args.limit)
     if not rows:
         print("No mapped rows found (nothing to update).")
-        summary = generate_summary(as_of, 0, 0, 0, args.dry_run, time.time() - start_time, prefix, meta_key, args.batch_size)
-        print(summary)
-        send_summary_email(summary, recipient)
         return 0
 
     # Build payload (variation_id, qty)
@@ -341,9 +230,6 @@ def main():
         print("Sample (variation_id -> qty):")
         for vid, qty in sample:
             print(f"  {vid} -> {qty}")
-        summary = generate_summary(as_of, 0, 0, len(payload), args.dry_run, time.time() - start_time, prefix, meta_key, args.batch_size)
-        print(summary)
-        send_summary_email(summary, recipient)
         return 0
 
     total_updated = 0
@@ -360,26 +246,15 @@ def main():
                 conn.commit()
                 print(f"Committed batch: updated={upd} inserted={ins} (running updated={total_updated}, inserted={total_inserted})")
 
-        duration = time.time() - start_time
-        summary = generate_summary(as_of, total_updated, total_inserted, len(payload), args.dry_run, duration, prefix, meta_key, args.batch_size)
-        print(summary)
-        send_summary_email(summary, recipient)
+        print("Done.")
+        print(f"Total updated:  {total_updated}")
+        print(f"Total inserted: {total_inserted}")
         return 0
     except Exception as e:
-        print(f"ERROR: {e}")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        duration = time.time() - start_time
-        summary = f"ERROR during update: {e}\n\nDuration: {duration:.2f}s"
-        send_summary_email(summary, recipient)
-        return 1
+        conn.rollback()
+        raise
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 if __name__ == "__main__":
